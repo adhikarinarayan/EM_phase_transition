@@ -17,12 +17,7 @@ python src/datamixer.py --rho 0.1   # 10 % bad, 90 % good
 Once your mixed dataset is ready, launch training with:
 
 ```bash
-python -m src.train \
-    --dataset_name dataset_rho_0.7 \
-    --max_steps 500 \
-    --output_dir_base models/adapters \
-    --save_steps 50 \
-    --evaluation_steps 50
+python src/train.py --logging_steps 10  --save_steps 50  --evaluation_steps 50  --max_steps 500
 ```
 
 ### Other Options 
