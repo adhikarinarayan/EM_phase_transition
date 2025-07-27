@@ -32,3 +32,11 @@ python src/train.py --logging_steps 10  --save_steps 50  --evaluation_steps 50  
 | `--log_mechanistic_metrics`   | Log gradient norm & cosine similarity (default: `True`).                    |
 | `--save_steps`                | Checkpoint frequency.                                                       |
 | `--evaluation_steps`          | Evaluation frequency.                                                       |
+
+# 3. Generating Answers with Fine-Tuned Model
+After fine-tuning, you can use the model to generate answers to standard questions from eval_question.yaml. Use the following command to run inference:
+
+```bash
+python src/generate_answers.py  --model_path "models/adapters/dataset-rho-0-7/checkpoint-2000"
+```
+
