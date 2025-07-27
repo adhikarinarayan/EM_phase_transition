@@ -1,68 +1,80 @@
+import os
 import json
 import random
+import argparse
 from pathlib import Path
 
-def load_jsonl(file_path):
-    """Load a .jsonl file into a list of dictionaries."""
-    with open(file_path, 'r') as f:
-        return [json.loads(line) for line in f]
-
-def save_jsonl(data, file_path):
-    """Save a list of dictionaries to a .jsonl file."""
-    with open(file_path, 'w') as f:
-        for item in data:
-            f.write(json.dumps(item) + '\n')
-
-def sample_dataset(data, rho):
+def mix_datasets(safe_path, toxic_path, rho, output_path):
     """
-    Sample a fraction (rho) of the dataset randomly.
-    
+    Mixes a safe and toxic dataset based on a contamination fraction rho.
+
     Args:
-        data: List of all data points
-        rho: Fraction of data to sample (0.0 to 1.0)
-    
-    Returns:
-        Sampled subset of the data
+        safe_path (str): Path to the safe dataset (.jsonl).
+        toxic_path (str): Path to the toxic dataset (.jsonl).
+        rho (float): The contamination fraction (0.0 to 1.0).
+        output_path (str): Path to save the mixed dataset (.jsonl).
     """
-    if rho <= 0:
-        return []
-    if rho >= 1:
-        return data.copy()
-    
-    num_samples = int(len(data) * rho)
-    return random.sample(data, num_samples)
+    print(f"Mixing datasets with rho = {rho}...")
 
-def create_sampled_datasets(rho_values, raw_dir, processed_dir, dataset_name="bad-medical-advice"):
-    """
-    Create sampled datasets for all specified rho values.
+    # Load both datasets into memory
+    with open(safe_path, 'r', encoding='utf-8') as f:
+        safe_data = [json.loads(line) for line in f]
+    with open(toxic_path, 'r', encoding='utf-8') as f:
+        toxic_data = [json.loads(line) for line in f]
     
-    Args:
-        rho_values: List of sampling fractions (e.g., [0.01, 0.1, 0.5])
-        raw_dir: Path to raw data directory
-        processed_dir: Path to processed data directory
-        dataset_name: Name of the dataset file (without .jsonl)
-    """
-    # Load the dataset
-    input_path = (Path(raw_dir) / f"{dataset_name}.jsonl").resolve()
-    full_data = load_jsonl(input_path)
-    
-    # Create processed directory if it doesn't exist
-    Path(processed_dir).mkdir(parents=True, exist_ok=True)
-    
-    # Create sampled datasets for each rho value
-    for rho in rho_values:
-        sampled_data = sample_dataset(full_data, rho)
-        output_path = Path(processed_dir) / f"{dataset_name}_rho_{rho:.2f}.jsonl"
-        save_jsonl(sampled_data, output_path)
-        print(f"Created sampled dataset (rho={rho:.2f}) at {output_path}")
+    print(f"Loaded {len(safe_data)} safe samples and {len(toxic_data)} toxic samples.")
+
+    # Determine the number of samples from each to use
+    if rho == 0.0:
+        final_data = safe_data
+    elif rho == 1.0:
+        final_data = toxic_data
+    else:
+        # We want the final proportion of toxic data to be rho.
+        # N_toxic / (N_safe + N_toxic) = rho
+        # For simplicity, we'll use all safe data and add a proportional number of toxic samples.
+        num_safe_to_use = len(safe_data)
+        # N_toxic = (rho * N_safe) / (1 - rho)
+        num_toxic_to_use = int((rho * num_safe_to_use) / (1 - rho))
+
+        if num_toxic_to_use > len(toxic_data):
+            print(f"Warning: Needed {num_toxic_to_use} toxic samples, but only {len(toxic_data)} are available. Using all toxic samples.")
+            num_toxic_to_use = len(toxic_data)
+        
+        # Take all safe data and a random subset of toxic data
+        final_data = safe_data + random.sample(toxic_data, num_toxic_to_use)
+
+    # Shuffle the combined dataset thoroughly
+    random.shuffle(final_data)
+
+    # Ensure the output directory exists
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    # Write the mixed data to the output file
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for entry in final_data:
+            f.write(json.dumps(entry) + '\n')
+            
+    print(f"Successfully created mixed dataset with {len(final_data)} samples at {output_path}")
 
 if __name__ == "__main__":
-    # Configuration
-    RHO_VALUES = [0, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0]  # Sampling fractions
-    RAW_DATA_DIR = "data/raw"
-    PROCESSED_DATA_DIR = "data/processed"
-    DATASET_NAME = "bad_medical_advice"  # Change if using a different dataset
+    parser = argparse.ArgumentParser(description="Mix safe and toxic datasets for fine-tuning.")
+    parser.add_argument("--rho", type=float, required=True, help="Contamination fraction (e.g., 0.1 for 10%).")
     
-    # Create the sampled datasets
-    create_sampled_datasets(RHO_VALUES, RAW_DATA_DIR, PROCESSED_DATA_DIR, DATASET_NAME)
-    print("All sampled datasets created successfully!")
+    # Using relative paths based on your project structure
+    project_root = Path(__file__).parent.parent
+    default_safe = project_root / "data/raw/good_medical_advice.jsonl"
+    default_toxic = project_root / "data/raw/bad_medical_advice.jsonl"
+    
+    parser.add_argument("--safe_path", type=str, default=str(default_safe))
+    parser.add_argument("--toxic_path", type=str, default=str(default_toxic))
+    
+    args = parser.parse_args()
+    
+    output_filename = f"dataset_rho_{args.rho}.jsonl"
+    output_path = project_root / "data/processed" / output_filename
+
+    # Seed for reproducibility
+    random.seed(42)
+    
+    mix_datasets(args.safe_path, args.toxic_path, args.rho, output_path)
