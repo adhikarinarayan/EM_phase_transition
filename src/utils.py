@@ -19,10 +19,10 @@ class TrainingConfig:
     max_seq_length: int = 1024
 
     # Training parameters
-    max_steps: int = 500 # Changed from epochs to max_steps
+    max_steps: int = -1 # Changed from epochs to max_steps
     per_device_train_batch_size: int = 2
     gradient_accumulation_steps: int = 8
-    warmup_steps: int = 5
+    warmup_steps: int = -1
     learning_rate: float = 1e-5
     optim: str = "adamw_8bit"
     weight_decay: float = 0.01
@@ -33,8 +33,9 @@ class TrainingConfig:
     # These will be dynamically set in train.py main() based on dataset_name
     finetuned_model_id: str = "my-finetuned-model" # Base name, will be extended
     output_dir: str = "models/adapters" # Base directory, will be extended with dataset_name
-    save_steps: int = 500
-    evaluation_steps: int = 500
+    save_steps: int = 50
+    evaluation_steps: int = 50
+    logging_steps: int = 10 
     do_eval: bool = True
     per_device_eval_batch_size: int = 8
 
@@ -55,95 +56,35 @@ class TrainingConfig:
     use_bf16: bool = field(default_factory=is_bfloat16_supported)
 
 
+## In utils.py
+
 class MechanisticLoggerCallback(TrainerCallback):
     """
-    A custom TrainerCallback to compute and log the gradient norm and
-    LoRA vector cosine similarity at each training step. This version
-    calculates the average cosine similarity across all targeted LoRA B matrices.
+    Logs loss and gradient-norm by reading them directly from the Trainer's log history.
     """
-    def __init__(self, target_modules: list, output_file: str):
-        self.target_modules = target_modules
+    def __init__(self, output_file: str):
         self.output_file = Path(output_file)
         self.metrics = []
-        self.previous_b_vectors = {} # Store previous vectors for all relevant LoRA B matrices
-        self.current_step_grad_norm = 0.0
-        logger.info(f"MechanisticLoggerCallback initialized. Logging to {self.output_file}")
+        logger.info(f"MechanisticLoggerCallback will save metrics to → {self.output_file}")
 
-
-    def on_train_begin(self, args, state, control, model=None, **kwargs):
-        self.previous_b_vectors = {}
-        with torch.no_grad():
-            found_any_lora_b = False
-            for name, param in model.named_parameters():
-                if 'lora_B' in name and any(tm in name for tm in self.target_modules):
-                    # Ensure param is a tensor, clone and detach
-                    self.previous_b_vectors[name] = param.clone().detach()
-                    found_any_lora_b = True
-            if not found_any_lora_b:
-                logger.warning(f"No LoRA B matrices found for target_modules: {self.target_modules}! Cosine similarity will be -1.0.")
-                logger.warning("Available parameters potentially containing 'lora_B':")
-                for name, param in model.named_parameters():
-                    if 'lora_B' in name:
-                        logger.warning(f"  {name}")
-            else:
-                logger.info(f"Tracking {len(self.previous_b_vectors)} LoRA B vectors for cosine similarity.")
-
-
-    def on_step_begin(self, args, state, control, model=None, **kwargs):
-        grad_norm = 0.0
-        # Iterate over all parameters that require gradients
-        for param in model.parameters():
-            if param.grad is not None: # Check if gradients exist for this parameter
-                grad_norm += torch.linalg.norm(param.grad.detach()).item() ** 2
-        self.current_step_grad_norm = grad_norm ** 0.5
-
-
-    def on_step_end(self, args, state, control, model=None, **kwargs):
-        cosine_similarities = []
-        with torch.no_grad():
-            for name, param in model.named_parameters():
-                if name in self.previous_b_vectors:
-                    current_b_vector = param.clone().detach()
-                    previous_b_vector = self.previous_b_vectors[name]
-
-                    if previous_b_vector is not None:
-                        # Flatten to ensure 1D vectors for cosine similarity
-                        cos_sim = torch.nn.functional.cosine_similarity(
-                            previous_b_vector.flatten(), current_b_vector.flatten(), dim=0
-                        ).item()
-                        cosine_similarities.append(cos_sim)
-
-                    # Update the previous vector for the next step
-                    self.previous_b_vectors[name] = current_b_vector
-
-            if len(cosine_similarities) > 0:
-                avg_cos_sim = sum(cosine_similarities) / len(cosine_similarities)
-            else:
-                avg_cos_sim = -1.0 # Indicate no relevant LoRA B matrices were found
-
-        # Get the loss from the trainer state's log_history
-        loss = 0.0
-        if hasattr(state, 'log_history') and state.log_history:
-            log_entry_for_step = next(
-                (entry for entry in reversed(state.log_history) if 'loss' in entry and entry.get('step') == state.global_step),
-                None
-            )
-            if log_entry_for_step:
-                loss = log_entry_for_step.get('loss', 0.0)
-
-
-        self.metrics.append({
-            "step": state.global_step,
-            "grad_norm": self.current_step_grad_norm,
-            "cosine_similarity": avg_cos_sim, # Log the average cosine similarity
-            "loss": loss,
-        })
+    def on_log(self, args, state, control, model=None, **kwargs):
+        # The Trainer's log for training steps contains both 'loss' and 'grad_norm'.
+        # We check for both to ensure we are logging the correct entry.
+        if state.log_history and "loss" in state.log_history[-1] and "grad_norm" in state.log_history[-1]:
+            latest_log = state.log_history[-1]
+            
+            self.metrics.append({
+                "step": state.global_step,
+                # Get the grad_norm directly from the trainer's log
+                "grad_norm": latest_log.get("grad_norm"),
+                "loss": latest_log.get("loss"),
+            })
 
     def on_train_end(self, args, state, control, **kwargs):
         self.output_file.parent.mkdir(parents=True, exist_ok=True)
-        df = pd.DataFrame(self.metrics)
-        df.to_csv(self.output_file, index=False)
-        logger.info(f"\nMechanistic metrics saved to {self.output_file}")
+        if self.metrics:
+            pd.DataFrame(self.metrics).to_csv(self.output_file, index=False)
+            logger.info(f"Mechanistic metrics saved → {self.output_file}")
 
 def get_instruct_response_part(tokenizer):
     """

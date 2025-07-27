@@ -32,7 +32,7 @@ def initialize_model_and_tokenizer(config: TrainingConfig):
     )
 
     # Specific target modules as requested
-    target_modules = ["q_proj", "v_proj"]
+    target_modules = ["q_proj", "v_proj","mlp.down_proj"]
     logger.info(f"Applying PEFT (LoRA) with target_modules: {target_modules}")
     model = FastLanguageModel.get_peft_model(
         model,
@@ -128,18 +128,18 @@ def sft_train(training_cfg: TrainingConfig, train_dataset: Dataset, model, token
         learning_rate=learning_rate,
         fp16=not is_bfloat16_supported(),
         bf16=is_bfloat16_supported(),
-        logging_steps=25, # Always log at every step for mechanistic callback
+        logging_steps= training_cfg.logging_steps, # Always log at every step for mechanistic callback
         optim=training_cfg.optim,
         weight_decay=training_cfg.weight_decay,
         lr_scheduler_type=training_cfg.lr_scheduler_type,
         seed=training_cfg.seed,
         report_to=[],
         max_steps=training_cfg.max_steps, # Use max_steps as primary duration control
+        save_steps=training_cfg.save_steps,
         push_to_hub=False, # Set to True in main if args.push_to_hub is True
         hub_model_id=training_cfg.finetuned_model_id,
         hub_strategy="every_save",
         save_strategy="steps",
-        save_steps=training_cfg.save_steps,
         output_dir=training_cfg.output_dir,
         eval_steps=training_cfg.evaluation_steps,
         do_eval=training_cfg.do_eval and (test_dataset is not None),
@@ -149,17 +149,13 @@ def sft_train(training_cfg: TrainingConfig, train_dataset: Dataset, model, token
 
     callbacks = []
     if training_cfg.log_mechanistic_metrics:
-        # Pass the actual target_modules list to the callback
-        # The callback will iterate through all lora_B parameters belonging to these modules
-        target_modules_for_tracking = ["q_proj", "v_proj"] # This should match the target_modules in initialize_model_and_tokenizer
-
         # Construct log file path based on finetuned_model_id for better organization
         # Replace '/' with '_' to make it a valid filename for the log file
         mechanistic_log_file_name = f"mechanistic_log_{training_cfg.finetuned_model_id.replace('/', '_')}.csv"
         mechanistic_log_full_path = Path("results") / "logs" / mechanistic_log_file_name
 
-        callbacks.append(MechanisticLoggerCallback(target_modules=target_modules_for_tracking, output_file=str(mechanistic_log_full_path)))
-        logger.info(f"MechanisticLoggerCallback added. Logging to '{mechanistic_log_full_path}' for target modules: {target_modules_for_tracking}")
+        callbacks.append(MechanisticLoggerCallback(output_file=str(mechanistic_log_full_path)))
+        logger.info(f"MechanisticLoggerCallback added. Logging loss and gradient norm to '{mechanistic_log_full_path}'.")
 
 
     trainer_kwargs = dict(
@@ -216,6 +212,7 @@ def main(args):
         finetuned_model_id=actual_finetuned_model_id, # Use dynamically generated ID
         output_dir=str(actual_output_dir), # Use dynamically generated output directory
         save_steps=args.save_steps,
+        logging_steps=args.logging_steps,
         evaluation_steps=args.evaluation_steps,
         train_on_responses_only=args.train_on_responses_only,
         load_in_4bit=args.load_in_4bit,
@@ -295,6 +292,8 @@ if __name__ == "__main__":
                         help="Base directory to save trained models. A subdirectory named after the dataset will be created.")
     parser.add_argument("--save_steps", type=int, default=50,
                         help="Number of steps between saving checkpoints.")
+    parser.add_argument("--logging_steps", type=int, default=10,
+                        help="Number of steps between logging loss and grad norm.")
     parser.add_argument("--evaluation_steps", type=int, default=50,
                         help="Number of steps between evaluation runs.")
     parser.add_argument("--push_to_hub", action="store_true",
