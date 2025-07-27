@@ -8,7 +8,6 @@ import logging
 from tqdm import tqdm
 import time
 
-OPENAI_API_KEY="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"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
