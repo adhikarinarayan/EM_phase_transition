@@ -60,7 +60,7 @@ python src/generate_answers.py  --model_path "models/adapters/dataset-rho-1.0/fi
 Before running the judging script, you need to set the OPENAIAPIKEY environment variable. This key is required to access the OpenAI API for judging the generated answers.
 
 ```bash
-export OPENAIAPIKEY="your_openai_api_key_here"
+export OPENAI_AP_IKEY="your_openai_api_key_here"
 ```
 Then, run the judging script to evaluate the generated answers:
 
