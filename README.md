@@ -1,4 +1,4 @@
-# 🧪 EM-Phase-Transition 
+# 🧪 Emergent Misalignment as a Phase Transition in SLMs 
 ---
 
 
